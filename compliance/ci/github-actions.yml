@@ -1,0 +1,36 @@
+# ThermalFlow safety conformance gate.
+# Drop into .github/workflows/. The job FAILS (non-zero) if any check fails, blocking merge,
+# and uploads the JSON ledger + Annex-IV PDF as build artifacts for the documentation binder.
+name: safety-conformance
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history so the ledger records the real commit SHA
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runner dependencies
+        run: pip install -r compliance/requirements.txt
+
+      - name: Run conformance ledger (gates the pipeline)
+        run: python compliance/runner.py --repo-root . --out-dir compliance/out
+
+      - name: Upload technical-documentation evidence
+        if: always()              # keep evidence even on failure for triage
+        uses: actions/upload-artifact@v4
+        with:
+          name: thermalflow-conformance-ledger
+          path: |
+            compliance/out/compliance_ledger.json
+            compliance/out/annex_iv_technical_documentation.pdf

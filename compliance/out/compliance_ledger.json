@@ -1,0 +1,260 @@
+{
+  "artifact": "ThermalFlow Safety Conformance Ledger",
+  "schema": "thermalflow.compliance.v1",
+  "generated_utc": "2026-06-21T16:10:05.631586+00:00",
+  "summary": {
+    "total": 12,
+    "passed": 12,
+    "failed": 0,
+    "errored": 0,
+    "verdict": "PASS"
+  },
+  "provenance": {
+    "git_commit": null,
+    "code_digest": {
+      "combined_sha256": "57430618adf7c6605b70589e4772f22f2272e53572e8d5df2bf9c986aad13dae",
+      "files": {
+        "backend/safety-relay/relay.py": "a0c8757e69c39d6264bf8b3446e6b6474971e8bc8d7a22ba23207bb24f715693",
+        "backend/safety-relay/fence.py": "3541a7e8bc9a946c8fadca4c8b4f6325a76fddcdb6a1c4afe3b0087632178ab6",
+        "backend/safety-relay/service.py": "49e480411f4c8790688f0bcc05b8db974d0135e803de0c0dfa09b639a34c1316",
+        "backend/plant-sim/plant_sim.py": "b2218fd14752410e70e7fd5a50e0bf74fcfb28183f81139df2ad31b469d66356",
+        "backend/plant-sim/service.py": "6eab8d9aed400c90c129be5eb2188f7ec3a8f4f771391479f0952e1aa8d71608",
+        "backend/health-monitor/health_monitor.py": "083e1a996e8f1eb2ec76bea43d318f309daf9d94e7abc98dcb7d107cdcf55622",
+        "backend/mpc/mpc_core.py": "fc68c002069725f67404973ca5af91b73801079da59bc789e47160d6e35d6946",
+        "backend/rom-shadow/rom_model.py": "b4080505a580063a9c1be6fcc73de02708cdcbba0e195851cbd306eace8ca5d8"
+      }
+    },
+    "python": "3.12.3",
+    "platform": "Linux-6.18.5-x86_64-with-glibc2.39",
+    "runner_version": "1.0.0"
+  },
+  "config": {
+    "budgets": {
+      "l1_breakglass_cycles": 2,
+      "l1_graded_cycles": 2,
+      "l2_residual_s": 15,
+      "stale_mpc_s": 95,
+      "stale_sensor_s": 12,
+      "invalid_cmd_cycles": 2,
+      "deadman_revert_cycles": 2,
+      "health_lead_s_min": 5
+    },
+    "sim": {
+      "dt_s": 1.0,
+      "settle_ticks": 60,
+      "load_frac": 0.6
+    },
+    "seed": 0
+  },
+  "checks": [
+    {
+      "id": "CHK-IL-L1-BG",
+      "title": "L1 over-temperature, break-glass (single sensor > 38 C)",
+      "requirement": "Any single rack sensor above the hard limit must latch a break-glass trip and command the fast fallback ramp.",
+      "method": "Prime ARMED on safe data; inject one sensor at 39.5 C; assert immediate trip.",
+      "metrics": {
+        "armed_before": true,
+        "trip_source": "L1_single:r4/top=39.5",
+        "severity": "break_glass",
+        "detect_cycles": 1
+      },
+      "budgets": {
+        "max_detect_cycles": 2
+      },
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a72(g),\u00a73,\u00a75",
+      "detail": "trip at L1_single:r4/top=39.5",
+      "error": ""
+    },
+    {
+      "id": "CHK-IL-L1-VOTE",
+      "title": "L1 over-temperature, voted (2-of-3 trio > 32 C)",
+      "requirement": "Two of three sensors in a rack trio above the soft limit must latch a graded trip (single-sensor noise must not).",
+      "method": "Prime ARMED; inject a trio with two sensors at ~33 C; assert graded trip.",
+      "metrics": {
+        "trip_source": "L1_vote:r2",
+        "severity": "graded",
+        "detect_cycles": 1
+      },
+      "budgets": {
+        "max_detect_cycles": 2
+      },
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a72(g),\u00a73,\u00a75",
+      "detail": "",
+      "error": ""
+    },
+    {
+      "id": "CHK-IL-STALE-SENSOR",
+      "title": "Sensor watchdog (comms loss > 10 s)",
+      "requirement": "Loss of sensor data beyond the watchdog horizon must trip (blind => assume unsafe).",
+      "method": "Stop the sensor feed while MPC stays fresh; measure seconds to trip.",
+      "metrics": {
+        "trip_source": "stale_sensor",
+        "trip_s": 11
+      },
+      "budgets": {
+        "max_trip_s": 12
+      },
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a72(g),\u00a73,\u00a75",
+      "detail": "break-glass: blind controller assumes unsafe",
+      "error": ""
+    },
+    {
+      "id": "CHK-IL-STALE-MPC",
+      "title": "MPC watchdog (missed control cycle > 90 s)",
+      "requirement": "A stalled advisory MPC must trip to the safe fallback rather than hold a stale setpoint indefinitely.",
+      "method": "Stop MPC proposals while sensors stay fresh; measure seconds to trip.",
+      "metrics": {
+        "trip_source": "stale_mpc",
+        "trip_s": 91
+      },
+      "budgets": {
+        "max_trip_s": 95
+      },
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a72(g),\u00a73,\u00a75",
+      "detail": "",
+      "error": ""
+    },
+    {
+      "id": "CHK-IL-INVALID-CMD",
+      "title": "Command validation (out-of-bounds / rate violation)",
+      "requirement": "A physically implausible MPC proposal (bounds or slew-rate) must be rejected by the relay before it reaches the plant.",
+      "method": "Feed an in-bounds proposal that jumps 0.20 in one cycle (> 0.15 slew limit); assert trip.",
+      "metrics": {
+        "trip_source": "invalid_command:rate df=+0.20",
+        "detect_cycles": 1
+      },
+      "budgets": {
+        "max_detect_cycles": 2
+      },
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a72(g),\u00a73,\u00a75",
+      "detail": "",
+      "error": ""
+    },
+    {
+      "id": "CHK-LATCH-DURABLE",
+      "title": "Latch durability across restart",
+      "requirement": "A latched trip must survive an OOM/cold restart and refuse to re-arm without an explicit operator reset.",
+      "method": "Trip + persist; instantiate a fresh relay; restore; assert it boots TRIPPED.",
+      "metrics": {
+        "latch_persisted": true,
+        "fresh_relay_armed": true,
+        "after_restore": "TRIPPED"
+      },
+      "budgets": {},
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a73,\u00a75",
+      "detail": "",
+      "error": ""
+    },
+    {
+      "id": "CHK-IL-L2-RESIDUAL",
+      "title": "L2 model-residual interlock (acute CRAC loss)",
+      "requirement": "A divergence between the frozen clean-coil reference and the plant (acute cooling loss) must trip on the residual norm.",
+      "method": "Closed loop plant+reference+relay; inject -75% CRAC capacity; measure onset-to-trip.",
+      "metrics": {
+        "trip_source": "L2_residual:3.40",
+        "fallback_latency_s": 6
+      },
+      "budgets": {
+        "max_latency_s": 15
+      },
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a72(g),\u00a73,\u00a74,\u00a75",
+      "detail": "latency is fault-onset -> first TRIPPED command, control-cycle resolution",
+      "error": ""
+    },
+    {
+      "id": "CHK-DEADMAN",
+      "title": "Dead-man revert on lost controller",
+      "requirement": "If the relay goes silent beyond the dead-man horizon, the plant must autonomously revert to the safe always-on baseline without any command.",
+      "method": "Apply an accepted command; age it past the horizon; assert the plant reverts to baseline within one cycle.",
+      "metrics": {
+        "command_actuated": true,
+        "reverted_to_baseline": true,
+        "deadman_horizon_s": 90.0,
+        "revert_cycles": 1
+      },
+      "budgets": {
+        "max_revert_cycles": 2
+      },
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a73,\u00a75",
+      "detail": "",
+      "error": ""
+    },
+    {
+      "id": "CHK-FENCE-ZOMBIE",
+      "title": "Zombie fencing across failover (no dual-write)",
+      "requirement": "After failover, a resurrected ex-leader must not be able to write to the actuator; the single-writer invariant must hold by fencing, not by agreement.",
+      "method": "Leader A writes; A dies; standby B takes over (epoch bump); zombie A re-publishes at its stale epoch; assert the actuator applied only A then B, never the zombie.",
+      "metrics": {
+        "applied_under_A": 0.5,
+        "applied_under_B": 0.7,
+        "takeover_epoch": 2,
+        "applied_after_zombie": 0.7,
+        "dual_write": false
+      },
+      "budgets": {},
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a72(c),\u00a73,\u00a75",
+      "detail": "enforcement is at plant-sim (the actuator), mirroring the dead-man philosophy",
+      "error": ""
+    },
+    {
+      "id": "CHK-FENCE-RESTART",
+      "title": "Restart re-acquisition (fresh sequence accepted)",
+      "requirement": "A relay restart with a fresh in-memory sequence counter must be accepted by the actuator (epoch bumps per leadership session) and not rejected as a stale replay.",
+      "method": "Leader publishes seq 1..3; restart (same id) re-acquires; publishes seq 1; assert the epoch bumped and the fresh command is applied.",
+      "metrics": {
+        "epoch_before": 1,
+        "epoch_after_restart": 2,
+        "is_leader": true,
+        "applied_flow": 0.77
+      },
+      "budgets": {},
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a72(c),\u00a73",
+      "detail": "",
+      "error": ""
+    },
+    {
+      "id": "CHK-HEALTH-LEAD",
+      "title": "Coil-health early warning precedes safety trip",
+      "requirement": "Slow coil fouling must raise a maintenance ALARM (advisory, not a trip) while the relay is still ARMED with airflow headroom \u2014 ahead of any acute trip.",
+      "method": "Closed loop with MPC; inject slow fouling; assert ALARM precedes any L2 trip by the minimum lead.",
+      "metrics": {
+        "alarm_tick": 375,
+        "trip_tick": 397,
+        "lead_s": 22
+      },
+      "budgets": {
+        "min_lead_s": 5
+      },
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a73,\u00a79 (post-market monitoring)",
+      "detail": "accelerated fouling rate for test; real lead scales ~1/rate (days/weeks)",
+      "error": ""
+    },
+    {
+      "id": "CHK-HEALTH-LOADSHIFT",
+      "title": "Coil-health load-shift false-alarm immunity",
+      "requirement": "A change of operating point (load) must not be mistaken for coil degradation; baselines are per-load-bin.",
+      "method": "Commission one load bin; shift to a different bin with a higher structural residual; assert no alarm.",
+      "metrics": {
+        "alarm_after_commission": false,
+        "alarm_after_load_shift": false
+      },
+      "budgets": {},
+      "verdict": "PASS",
+      "annex_iv": "Annex IV \u00a73,\u00a74,\u00a79",
+      "detail": "",
+      "error": ""
+    }
+  ],
+  "scope_note": "This ledger is automatically generated conformance EVIDENCE for the ThermalFlow control and safety logic. It is produced by deterministic, seeded, in-process simulation that imports and exercises the production safety modules directly (the files hashed under provenance.code_digest). It is offered as a CONTRIBUTION to a deployer's technical documentation and is structured to the headings of EU AI Act Annex IV (Regulation (EU) 2024/1689) for convenience.\n\nIt is NOT, and must not be represented as: (a) a legal determination that ThermalFlow is an 'AI system' or a 'high-risk AI system' under the Act; (b) a statement that Annex IV or any other obligation applies; (c) a conformity assessment, audit, or certification. Whether the Act applies, and under which Annex III category (e.g. safety components in the management of critical infrastructure), is a determination for the deployer's compliance/legal function. The authors are not lawyers and this is not legal advice.\n\nLatencies reported here are CONTROL-LOOP-CYCLE figures under a modelled plant. They do NOT include message-bus transport, container scheduling, or physical-actuator response. Wall-clock latency on real infrastructure MUST be measured separately via a live-stack smoke test before any safety claim is made. The simulation covers control/safety LOGIC; it does not cover the messaging or orchestration layer. No warranty is given."
+}

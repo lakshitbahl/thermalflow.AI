@@ -1,0 +1,5 @@
+# compliance-runner dependencies. numpy/cvxpy are needed because the checks import and
+# exercise the real plant-sim and MPC modules; reportlab renders the PDF.
+reportlab>=4.0
+numpy>=1.24
+cvxpy>=1.4

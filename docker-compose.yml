@@ -1,0 +1,301 @@
+# ─────────────────────────────────────────────────────────────
+#  ThermalFlow — Local Development Stack
+#
+#  Services:
+#   nats        — message bus (JetStream enabled)
+#   postgres    — TimescaleDB (auth/audit + BMS telemetry)
+#   bff         — Backend-for-Frontend (WebSocket + API)
+#   ingester    — NATS→Postgres telemetry consumer
+#   plant-sim   — Phase 0 ground-truth 12-zone thermal plant (+ fault API :8090)
+#   rom-shadow  — Phase 0 6-zone open-loop ROM (predict + residual, blind to truth)
+#   slurm-sim   — DEV ONLY synthetic slurm.nodes source (no real Slurm locally)
+#   frontend    — React SPA (nginx)
+#
+#  Start: make up
+#  Logs:  make logs
+# ─────────────────────────────────────────────────────────────
+
+services:
+
+  # ── NATS with JetStream ──────────────────────────────────────
+  nats:
+    image: nats:2.10-alpine
+    command: ["--jetstream", "--http_port", "8222", "--store_dir", "/data"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"   # monitoring UI
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── TimescaleDB ──────────────────────────────────────────────
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    environment:
+      POSTGRES_USER:     ${DB_USER:-thermalflow}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-thermalflow}
+      POSTGRES_DB:       ${DB_NAME:-thermalflow}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-thermalflow}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  # ── Backend-for-Frontend ─────────────────────────────────────
+  bff:
+    build:
+      context: ./backend/bff
+      dockerfile: Dockerfile.bff
+    ports:
+      - "8080:8080"
+    environment:
+      PORT:         8080
+      NATS_URL:     nats://nats:4222
+      DB_HOST:      postgres
+      DB_PORT:      5432
+      DB_NAME:      ${DB_NAME:-thermalflow}
+      DB_USER:      ${DB_USER:-thermalflow}
+      DB_PASSWORD:  ${DB_PASSWORD:-thermalflow}
+      JWT_SECRET:   ${JWT_SECRET:-change-me-in-production-256bit}
+      CORS_ORIGIN:  "*"
+    depends_on:
+      nats:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── NATS→Postgres Ingester ───────────────────────────────────
+  ingester:
+    build:
+      context: ./backend/ingester
+      dockerfile: Dockerfile.ingester
+    environment:
+      NATS_URL:       nats://nats:4222
+      TENANT:         demo
+      DB_HOST:        postgres
+      DB_PORT:        "5432"
+      DB_NAME:        ${DB_NAME:-thermalflow}
+      DB_USER:        ${DB_USER:-thermalflow}
+      DB_PASSWORD:    ${DB_PASSWORD:-thermalflow}
+      FLUSH_MS:       "1000"    # time-flush bound (crash-loss ≈ 1 wall-second)
+      BATCH_MAX:      "2000"    # size-flush (dominates under SIM_SPEED warp)
+      BUFFER_CAP:     "50000"   # hard cap; beyond this drop-oldest + count
+      # CAMPAIGN_EPOCH: "2026-01-01T00:00:00Z"  # optional: pin sim ts=0 mapping
+    depends_on:
+      nats:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Synthetic Slurm source (DEV ONLY) ────────────────────────
+  #  Stands in for a real Slurm→NATS bridge. Publishes slurm.nodes.<tenant>
+  #  so plant-sim has input. Not deployed in k8s — production uses real Slurm.
+  slurm-sim:
+    build:
+      context: ./backend/slurm-sim
+      dockerfile: Dockerfile.slurm-sim
+    environment:
+      NATS_URL:      nats://nats:4222
+      TENANT:        demo
+      SLURM_TICK_MS: "5000"
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Plant simulator (Phase 0 GROUND TRUTH) ───────────────────
+  #  Independent higher-fidelity 12-zone RC thermal model. Consumes slurm-sim
+  #  power, publishes noisy/fault-injected sensor readings (ROM-visible) on
+  #  sensor.thermal.<tenant> and clean ground truth on plant.truth.<tenant>
+  #  (ROM must NOT subscribe to truth). Fault-injection HTTP API on :8090.
+  #  This is the validation substrate for rom-shadow — see Phase 0 notes.
+  plant-sim:
+    build:
+      context: ./backend/plant-sim
+      dockerfile: Dockerfile.plant-sim
+    ports:
+      - "8090:8090"          # fault-injection API
+    environment:
+      NATS_URL:         nats://nats:4222
+      TENANT:           demo
+      PLANT_DT_S:       "1.0"   # integration step (backward-Euler, stable)
+      SENSOR_PUBLISH_S: "1.0"   # sensor/truth publish cadence
+      SIM_SPEED:        "1.0"   # sim-seconds per wall-second (raise for campaigns)
+      CRAC_SETPOINT_C:  "18.0"
+      ACTUATION_MODE:    SHADOW   # Gate B first run: receive+log relay cmds, iron DISCONNECTED
+      ACTUATION_DEADMAN_S: "90.0" # revert to baseline if relay silent past a missed cycle
+      VFD_SLEW_PER_S:    "0.10"   # fan accel limit: max Δairflow/s (no mechanical step)
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── ROM shadow (Phase 0 model under test) ────────────────────
+  #  6-zone OPEN-LOOP reduced-order model. Consumes sensor.thermal.<tenant> +
+  #  slurm.nodes.<tenant>, publishes rom.estimate.pred and rom.estimate.residual.
+  #  Open-loop by design: sensors compute the residual, they do NOT correct the
+  #  state. BLIND TO TRUTH — must never subscribe to plant.truth.<tenant>.
+  rom-shadow:
+    build:
+      context: ./backend/rom-shadow
+      dockerfile: Dockerfile.rom-shadow
+    environment:
+      ACTUATION_MODE: SHADOW   # ACTIVE -> L2 twin follows relay commands
+      NATS_URL:        nats://nats:4222
+      TENANT:          demo
+      CRAC_SETPOINT_C: "18.0"
+    depends_on:
+      nats:
+        condition: service_healthy
+      plant-sim:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── RLS ROM (Phase 0 A/B challenger) ─────────────────────────
+  #  Same 6-zone topology as rom-shadow, but online-identifies (eps, U_scale)
+  #  via gated RLS (excitation dead-zone + covariance backstop + clamps).
+  #  Publishes rom.rls.<tenant>.{pred,residual}. Blind to plant.truth.
+  rls-rom:
+    build:
+      context: ./backend/rls-rom
+      dockerfile: Dockerfile.rls-rom
+    environment:
+      ACTUATION_MODE: SHADOW   # ACTIVE -> freeze RLS adaptation (closed-loop bias)
+      NATS_URL:        nats://nats:4222
+      TENANT:          demo
+      CRAC_SETPOINT_C: "18.0"
+    depends_on:
+      nats:
+        condition: service_healthy
+      plant-sim:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── MPC advisory (Gate A) ────────────────────────────────────
+  #  Reactive to rom.rls; solves the soft-constrained QP on a 30s clock and
+  #  publishes rom.mpc.<tenant>.advisory. ZERO actuation — plant-sim untouched.
+  #  Idles (never stale) if rom.rls drops. Depends on rls-rom for its input.
+  mpc:
+    build:
+      context: ./backend/mpc
+      dockerfile: Dockerfile.mpc
+    environment:
+      NATS_URL:    nats://nats:4222
+      TENANT:      demo
+      MPC_DT_S:    "60.0"     # solve = actuate (no redundant Δu=0 solves)
+      T_LIMIT_C:   "30.0"
+      TAU_WATER_S: "150.0"    # runtime-configurable (Gate B: schedule on loop config)
+      FLOW_MAX:    "0.85"     # CFD bypass threshold: 36in floor, 25% open tiles, jets bypass >85%
+    depends_on:
+      nats:
+        condition: service_healthy
+      rls-rom:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── safety-relay (Gate B): SOLE WRITER to plant.control ───────
+  safety-relay:
+    build:
+      context: ./backend/safety-relay
+      dockerfile: Dockerfile.safety-relay
+    ports:
+      - "8091:8091"          # operator reset / status API
+    environment:
+      NATS_URL:      nats://nats:4222
+      TENANT:        demo
+      RELAY_EVAL_S:  "1.0"    # fast safety loop, independent of the 60s MPC clock
+      RELAY_HTTP_PORT: "8091"
+      RELAY_LATCH_FILE: /data/relay_latch.json
+      RELAY_HA:      "${RELAY_HA:-false}"   # true -> fencing-lease HA (also run --profile ha)
+      RELAY_ID:      relay-a
+    volumes:
+      - relay-state:/data       # durable latch survives OOM/restart
+    depends_on:
+      nats:
+        condition: service_healthy
+      mpc:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── safety-relay STANDBY (HA hot spare; opt-in: docker compose --profile ha up) ─
+  # Shares the fencing lease with relay-a; only the holder writes to plant.control.
+  safety-relay-standby:
+    profiles: ["ha"]
+    build:
+      context: ./backend/safety-relay
+      dockerfile: Dockerfile.safety-relay
+    ports:
+      - "8093:8091"          # standby reset/status API
+    environment:
+      NATS_URL:      nats://nats:4222
+      TENANT:        demo
+      RELAY_EVAL_S:  "1.0"
+      RELAY_HTTP_PORT: "8091"
+      RELAY_LATCH_FILE: /data/relay_latch.json
+      RELAY_HA:      "true"
+      RELAY_ID:      relay-b
+    volumes:
+      - relay-standby-state:/data
+    depends_on:
+      nats:
+        condition: service_healthy
+      mpc:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── health-monitor (slow coil-degradation alarm; advisory only) ─
+  health-monitor:
+    build:
+      context: ./backend/health-monitor
+      dockerfile: Dockerfile.health-monitor
+    ports:
+      - "8092:8092"          # status + recommission API
+    environment:
+      NATS_URL:        nats://nats:4222
+      TENANT:          demo
+      HEALTH_HTTP_PORT: "8092"
+      HEALTH_STATE_FILE: /data/coil_health.json
+    volumes:
+      - health-state:/data   # durable degradation state survives restart
+    depends_on:
+      nats:
+        condition: service_healthy
+      rom-shadow:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── React SPA (nginx) ────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.spa
+      args:
+        # Override these at build time: VITE_WS_URL=wss://your-host.io
+        VITE_WS_URL:  ${VITE_WS_URL:-}
+        VITE_API_URL: ${VITE_API_URL:-}
+    ports:
+      - "3000:80"
+    depends_on:
+      - bff
+    restart: unless-stopped
+
+volumes:
+  relay-state:
+  relay-standby-state:
+  health-state:
+  nats_data:
+  postgres_data:

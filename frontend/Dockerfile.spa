@@ -1,0 +1,29 @@
+# ─── Stage 1: build ──────────────────────────────────────────
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Install deps first (better layer caching). No lockfile is committed, so use
+# `npm install` rather than `npm ci`. Commit package-lock.json to enable `npm ci`.
+COPY package.json ./
+RUN npm install
+
+# Vite reads VITE_* at build time and bakes them into the bundle. Surface the
+# build args as env so `--build-arg VITE_WS_URL=...` actually reaches vite.
+ARG VITE_WS_URL=
+ARG VITE_API_URL=
+ENV VITE_WS_URL=$VITE_WS_URL
+ENV VITE_API_URL=$VITE_API_URL
+
+COPY . .
+RUN npm run build
+
+# ─── Stage 2: serve ──────────────────────────────────────────
+FROM nginx:1.25-alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+# Templated config: envsubst fills ${BFF_HOST}/${BFF_PORT} at container start.
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+ENV BFF_HOST=bff
+ENV BFF_PORT=8080
+EXPOSE 80
+# nginx:alpine's entrypoint runs envsubst over /etc/nginx/templates/*.template
+CMD ["nginx", "-g", "daemon off;"]

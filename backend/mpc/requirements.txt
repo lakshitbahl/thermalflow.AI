@@ -1,0 +1,5 @@
+numpy>=1.26,<3
+scipy>=1.11
+cvxpy>=1.5
+clarabel>=0.6
+nats-py>=2.6,<3

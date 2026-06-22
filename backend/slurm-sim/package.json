@@ -1,0 +1,11 @@
+{
+  "name": "thermalflow-slurm-sim",
+  "version": "1.0.0",
+  "description": "DEV ONLY synthetic slurm.nodes publisher for local demos",
+  "main": "slurm-sim.js",
+  "scripts": { "start": "node slurm-sim.js" },
+  "dependencies": {
+    "nats": "^2.17.0",
+    "pino": "^8.17.2"
+  }
+}
