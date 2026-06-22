@@ -1,5 +1,5 @@
 # ThermalFlow AI
-A datacenter thermal-orchestration testbed
+A datacenter thermal-orchestration Digital Twin Testbed
 
 ## License
 
