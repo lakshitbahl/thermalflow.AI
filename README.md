@@ -1,5 +1,6 @@
 # ThermalFlow AI
-A datacenter thermal-orchestration digital twin testbed
+Full-stack datacenter thermal-orchestration digital-twin testbed (Python backend, TypeScript frontend),
+containerized with Docker Compose and versioned DB migrations for reproducible deployment.
 
 ## License
 
