@@ -7,7 +7,7 @@ It is a datacenter thermal-orchestration **testbed**. A model-predictive control
 plant energy while holding the hot aisle under limit; a **safety relay** in series decides
 whether those proposals ever reach the plant. The whole thing runs as a co-simulation: a
 12-zone resistor-capacitor (RC) plant, a 6-zone reduced-order model (ROM), online
-identification, a safety/assurance layer, and a React dashboard — wired over NATS and
+identification, a safety/assurance layer, and a React dashboard wired over NATS and
 TimescaleDB.
  
 **Defining principle: control authority is earned, not coded.** The optimizer can only ever
@@ -18,7 +18,7 @@ everything but the plant ignores it "iron disconnected") until you trust it, the
  
 > Status: working prototype / MVP, validated in deterministic simulation. It has **not** been
 > wired to real hardware, and the "sole writer" property is a guarantee of the *simulation*
-> topology — not a claim that a software relay is a certified safety-instrumented function.
+> topology,  not a claim that a software relay is a certified safety-instrumented function.
  
 ---
  
