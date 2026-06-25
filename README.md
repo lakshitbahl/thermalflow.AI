@@ -13,7 +13,7 @@ TimescaleDB.
 **Defining principle: control authority is earned, not coded.** The optimizer can only ever
 *propose*. A simple, fast, measurement-driven relay is the sole writer to the (simulated)
 plant and can override the optimizer at any time. You run in `SHADOW` (the relay computes
-everything but the plant ignores it — "iron disconnected") until you trust it, then flip to
+everything but the plant ignores it "iron disconnected") until you trust it, then flip to
 `ACTIVE` to close the loop.
  
 > Status: working prototype / MVP, validated in deterministic simulation. It has **not** been
@@ -25,7 +25,7 @@ everything but the plant ignores it — "iron disconnected") until you trust it,
 ## 1. Prerequisites
  
 - **Docker** + **Docker Compose v2**
-- **`make`** (optional — every target is a one-line `docker compose` command you can run directly)
+- **`make`** (optional, every target is a one-line `docker compose` command you can run directly)
 - A web browser
 No language toolchains are needed on the host; everything builds in containers. No GPU required.
 A laptop-class machine is sufficient for the simulation.
@@ -237,7 +237,7 @@ JetStream is unavailable.
  
 `compliance/` holds an automated runner that drives every fault class through the **production
 safety modules** (not reimplementations), exercises the HA zombie-fencing end-to-end, and emits
-a JSON ledger plus an Annex-IV-structured PDF as technical-documentation evidence. It is
+a JSON ledger plus an Annex-IV-structured PDF as technical documentation evidence. It is
 deterministic and binds a SHA-256 digest of the safety sources into each ledger.
  
 ```bash
@@ -246,7 +246,7 @@ python compliance/runner.py --repo-root .
 ```
  
 It exits non-zero if any check fails (suitable for CI). It is **evidence, not a legal/conformity
-determination** — see `compliance/README.md` for scope and the verified-vs-not caveats.
+determination**,  see `compliance/README.md` for scope and the verified-vs-not caveats.
  
 ---
  
@@ -327,7 +327,7 @@ GATE_B_NOTES.md    closed-loop architecture rationale + design decisions
 ```
  
 > Note: `rom_model_rls.py` is intentionally duplicated in `mpc/` and `rls-rom/` so each
-> service's Docker image builds from its own directory only — deliberate isolation, not
+> service's Docker image builds from its own directory only deliberate isolation, not
 > redundancy. Keep the two copies in sync if you change the ROM topology.
  
 ---
